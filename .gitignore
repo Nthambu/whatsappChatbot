@@ -1,0 +1,4 @@
+node_modules/
+client/whatsapp-web-client/node_modules/
+server/node_modules/
+.env
