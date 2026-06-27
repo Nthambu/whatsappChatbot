@@ -1,119 +1,296 @@
-
-const {Client,LocalAuth, AuthStrategy, MessageMedia} = require('whatsapp-web.js');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
-const {OpenAI} = require("openai");
+const axios = require('axios');
 const app = express();
-const axios=require('axios');
 const port = 3000;
+const extractState = require("./stateExtractor");
+const extractProfile = require("./profileExtractor");
+const { generateText } = require("./llm");
 app.listen(port, () => {
-  //console.log(` app listening on port ${port}`)
-})
-const allSessionsObject={}
-//Starting point for interacting with the WhatsApp Web API
+  
+});
+
+// =========================
+// MEMORY STORAGE
+// =========================
+
+
+const {
+    database,
+    saveMemory
+} = require("./memory");
+const conversations = {};
+const userStates = {};
+const clientProfiles = {};
+for (const user in database) {
+
+    conversations[user] =
+        database[user].history || [];
+
+    userStates[user] =
+        database[user].state || {
+            serviceType: "",
+            project: "",
+            businessName: "",
+            budget: "",
+            timeline: "",
+            stage: "new_lead",
+            leadStatus: "new"
+        };
+
+    clientProfiles[user] =
+        database[user].profile || {
+            name: "",
+            businessName: "",
+            industry: "",
+            products: "",
+            location: "",
+            deliveryArea: "",
+            notes: ""
+        };
+}
+
+// =========================
+// WHATSAPP CLIENT
+// =========================
+
 const client = new Client({
-  authStrategy:new LocalAuth({
-    clientId:"client_one"
-  }),
- puppeteer:{
-  headless:false,
- }
+    authStrategy: new LocalAuth({
+        clientId: "client_one"
+    }),
+    puppeteer: {
+        headless: false
+    }
 });
-//listening for qr code event whenever it is generated
-client.on("qr",(qr)=>{
-  qrcode.generate(qr,{small:true})
-});
-client.on('ready', () => {
-   // console.log('Client is ready!');
-});
-const conversations={};
 
-client.on("message",async (message)=>{
-  try{
-if(message.isStatus)return;
-if(message.fromMe)return;
-if(message.from.includes('@g.us'))return;
-      // Create memory
-if(!conversations[message.from]){
-  conversations[message.from]=[];
+client.on("qr", qr => {
+    qrcode.generate(qr, {
+        small: true
+    });
+});
+
+client.on("ready", () => {
+    console.log("Client is ready!");
+});
+
+// =========================
+// MESSAGE HANDLER
+// =========================
+
+client.on("message", async (message) => {
+
+    try {
+
+        if (message.isStatus) return;
+        if (message.fromMe) return;
+        if (message.from.includes('@g.us')) return;
+        if (message.from.endsWith('@newsletter')) return;
+
+        const userId = message.from;
+        // =========================
+        // CREATE MEMORY
+        // =========================
+
+       
+if (!conversations[userId]) {
+    conversations[userId] = [];
+    console.log('conversations',conversations[userId])
 }
-conversations[message.from].push(`User:${message.body}`);
-if(conversations[message.from].length>6){
-  //keep only recent messages
-  conversations[message.from].shift()
+if (!clientProfiles[userId]) {
+    clientProfiles[userId] = {
+        name: "",
+        businessName: "",
+        industry: "",
+        products: "",
+        location: "",
+        deliveryArea: "",
+        notes: ""
+    };
+
 }
-const chatHistory=conversations[message.from].join('\n')
+if (!userStates[userId]) {
 
-const response = await axios.post('http://localhost:11434/api/generate',{
-  model:"llama3",
-  prompt:`You are Frank chatting with people on WhatsApp.
+    userStates[userId] = {
+        serviceType: "",
+        project: "",
+        businessName: "",
+        budget: "",
+        timeline: "",
+        stage: "new_lead",
+        leadStatus: "new"
+    };
+}
 
-You are:
-- friendly
-- conversational
-- confident
-- human-like
+        // =========================
+        // STATE EXTRACTION
+        // =========================
 
-IMPORTANT RULES:
-- NEVER say "ask Frank"
-- NEVER talk about Frank in third person
-- YOU ARE Frank
-- NEVER repeatedly introduce yourself
-- NEVER restart conversations
-- ALWAYS continue from previous context
-- Keep replies short and natural
-- Avoid long explanations unless user asks
-- Do not explain coding or development process
-- Do not generate source code
+const state = userStates[userId];
+        // =========================
+        // STORE USER MESSAGE
+        // =========================
 
-SERVICES YOU OFFER:
-- portfolio websites
-- business websites
-- rental management systems
+        conversations[userId].push(
+            `User: ${message.body}`
+        );
+        if (conversations[userId].length > 10) {
+            conversations[userId].shift();
+        }
+const chatHistory =
+    conversations[userId].join("\n");
+console.log('chatHistroy',chatHistory);
+        // =========================
+        // AI REQUEST
+        // =========================
+
+  
+
+             const  prompt= `
+You are Frank chatting on WhatsApp.
+
+You ARE Frank.
+
+Never say:
+- "Ask Frank"
+- "Frank can help"
+- "Frank will contact you"
+
+Speak as the business owner.
+
+Current Client State:
+
+${JSON.stringify(
+    userStates[userId],
+    null,
+    2
+)}
+
+Client Profile:
+
+${JSON.stringify(
+    clientProfiles[userId],
+    null,
+    2
+)}
+
+Rules:
+
+- Continue ongoing conversations.
+- Never restart context.
+- Never reintroduce yourself.
+- Remember previous discussion.
+- Use the stored client information.
+- Ask ONE question at a time.
+- Keep replies concise.
+- Sound natural.
+- Understand Kenyan English and Sheng.
+
+Services:
+
+- Portfolio websites
+- Business websites
+- Rental management systems
+- SaaS products
 - AI automation
 - WhatsApp chatbots
-- SaaS systems
-- frontend development
+- ISP billing systems
 - UI/UX design
-- custom web applications
+- Enterprise systems
 
-WHEN SOMEONE WANTS A SERVICE:
-1. Understand their requirements first
-2. Ask one question at a time
-3. Be conversational
-4. Estimate timeline and pricing only after understanding requirements
+Sales Process:
 
-CASUAL CONVERSATIONS:
-- Talk naturally
-- Understand Sheng/slang
-- Avoid robotic replies
-- Avoid customer support tone
+1. Understand requirements
+2. Gather missing details
+3. Estimate timeline
+4. Estimate budget
+5. Confirm project
+6. Move client to implementation
+
+Important:
+
+If information already exists,
+do NOT ask again.
 
 Conversation:
+
 ${chatHistory}
 
+User:
+${message.body}
+
 Frank:
+`;
+const aiReply = await generateText(prompt);
+      
+        if (!aiReply) {
+            console.log("NO AI RESPONSE");
+            return;
+        }
 
-`,
- stream:false
-})
-const aiReply=response.data.response;
-console.log('user',message.body);
-console.log('message',aiReply);
-
-if(!aiReply){
-   console.log("NO AI RESPONSE");
-   return;
-}
- // Store AI response
-conversations[message.from].push(
-   `Assistant: ${aiReply}`
-);
+        console.log("USER:", message.body);
+        console.log("AI:", aiReply);
 await message.reply(aiReply);
+     conversations[userId].push(
+    `Frank: ${aiReply}`
+);
 
-}catch(error){
-   console.log(error);
+if (conversations[userId].length > 10) {
+    conversations[userId].shift();
 }
-})
+      saveMemory(
+    conversations,
+    userStates,
+    clientProfiles
+);
+const extractedState =
+    await extractState(
+        chatHistory,
+        state
+    );
+
+Object.keys(extractedState).forEach(key => {
+
+    if (
+        extractedState[key] &&
+        extractedState[key].trim() !== ""
+    ) {
+        state[key] =
+            extractedState[key];
+    }
+
+});
+
+userStates[userId] = state;
+const extractedProfile =
+    await extractProfile(
+        chatHistory,
+        clientProfiles[userId]
+    );
+
+Object.keys(extractedProfile).forEach(key => {
+
+    if (
+        extractedProfile[key] &&
+        extractedProfile[key].trim() !== ""
+    ) {
+
+        clientProfiles[userId][key] =
+            extractedProfile[key];
+
+    }
+
+});
+
+    } catch (error) {
+
+        console.log(
+            "ERROR:",
+            error.response?.data || error.message
+        );
+
+    }
+
+});
 
 client.initialize();
